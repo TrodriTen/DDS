@@ -28,6 +28,12 @@ endif()
 
 find_package(Threads REQUIRED)
 
+# RPATH a las librerías del middleware (p.ej. /opt/dds/lib) en build e instalación.
+# --disable-new-dtags -> DT_RPATH, que también resuelve dependencias transitivas
+# (libfastdds -> libfoonathan_memory), a diferencia de DT_RUNPATH.
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
+add_link_options(-Wl,--disable-new-dtags)
+
 # ------------------------------------------------------------ núcleo común ---
 add_library(bench_core STATIC
   src/core/config.cpp
