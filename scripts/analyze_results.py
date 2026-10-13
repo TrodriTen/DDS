@@ -14,8 +14,7 @@ Salidas (en --out, por defecto el primer directorio indicado):
   comparison.csv   mediana (y rango) sobre repeticiones por
                    (escenario, transporte, ruido, flujo, fase, middleware)
   report.md        tablas comparativas Fast DDS vs Cyclone DDS
-  aggregate.prom   exposición Prometheus de la comparativa (--pushgateway URL
-                   la envía al Pushgateway de Proxmox)
+  aggregate.prom   la comparativa en formato de texto Prometheus (exportable)
   plots/*.png      con --plots (requiere matplotlib)
 
 Sólo usa la biblioteca estándar de Python (matplotlib es opcional).
@@ -28,10 +27,8 @@ import glob
 import json
 import math
 import os
-import re
 import statistics
 import sys
-import urllib.request
 from collections import defaultdict
 
 LAT_KEYS = ("mean", "std", "p50", "p95", "p99", "p999", "max")
@@ -284,13 +281,6 @@ def to_prometheus(runs_cmp, phase_cmp):
     return "\n".join(lines) + "\n"
 
 
-def push(url, text, job="dds_bench_analysis"):
-    req = urllib.request.Request(f"{url.rstrip('/')}/metrics/job/{job}", data=text.encode(), method="PUT",
-                                 headers={"Content-Type": "text/plain; version=0.0.4"})
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return resp.status
-
-
 def plots(runs, out_dir):
     try:
         import matplotlib
@@ -337,7 +327,6 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="+", help="directorios de resultados (se buscan ejecuciones recursivamente)")
     ap.add_argument("--out", help="directorio de salida (por defecto el primero de paths)")
-    ap.add_argument("--pushgateway", help="URL del Pushgateway (p.ej. http://proxmox:9091)")
     ap.add_argument("--plots", action="store_true", help="generar gráficas PNG (matplotlib)")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
@@ -370,17 +359,6 @@ def main():
     prom = to_prometheus(runs_cmp, phase_cmp)
     with open(os.path.join(out, "aggregate.prom"), "w") as f:
         f.write(prom)
-    if a.pushgateway:
-        try:
-            push(a.pushgateway, prom)
-            # Resúmenes por ejecución generados por los binarios
-            for run in runs:
-                for pf in glob.glob(os.path.join(run["dir"], "*_summary.prom")):
-                    inst = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{run['info']['run_id']}_{os.path.basename(pf)[:-12]}")
-                    with open(pf) as f:
-                        push(a.pushgateway, f.read(), job=f"dds_bench_run/instance/{inst}")
-        except Exception as e:  # noqa: BLE001 — el push es opcional
-            print(f"pushgateway: {e}", file=sys.stderr)
     if a.plots:
         plots(runs, os.path.join(out, "plots"))
     if not a.quiet:

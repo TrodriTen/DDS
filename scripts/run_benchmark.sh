@@ -9,8 +9,7 @@
 #     (SSH, con privilegios RT) con un fichero de fase en ambos nodos.
 #  2. Cambia la fase (baseline -> noise -> recovery) en ambos nodos y lanza el
 #     ruido iperf3 desde Servidor de Ruido / RPI 1 / RPI 2 hacia el objetivo.
-#  3. Espera, recoge los CSV de ambos nodos, ejecuta el análisis y opcionalmente
-#     publica el resumen en el Pushgateway de Proxmox.
+#  3. Espera, recoge los CSV de ambos nodos y ejecuta el análisis.
 #
 # Uso:
 #   scripts/run_benchmark.sh --mw fastdds|cyclonedds [opciones] [-- args extra para pub y sub]
@@ -143,9 +142,8 @@ if [[ $MW == cyclonedds && ( $TRANSPORT == shm || $TRANSPORT == zc ) ]]; then
 fi
 
 # Suscriptor (Data Reader) y publicador (Data Writer) en segundo plano remoto
-# /metrics: publicador en PROM_PORT, suscriptor en PROM_PORT+1 (colocalizables)
-SUB_CMD="$SUDO env $ENVV $BIN/${MW}_subscriber $COMMON --prom-port $((PROM_PORT + 1)) --iface $SUB_IFACE --match-timeout 120 --duration $DURATION --warmup $WARMUP"
-PUB_CMD="$SUDO env $ENVV $BIN/${MW}_publisher $COMMON $LOANS --prom-port $PROM_PORT --iface $WRITER_IFACE --match-timeout 60 --duration $DURATION --warmup $WARMUP"
+SUB_CMD="$SUDO env $ENVV $BIN/${MW}_subscriber $COMMON --iface $SUB_IFACE --match-timeout 120 --duration $DURATION --warmup $WARMUP"
+PUB_CMD="$SUDO env $ENVV $BIN/${MW}_publisher $COMMON $LOANS --iface $WRITER_IFACE --match-timeout 60 --duration $DURATION --warmup $WARMUP"
 SUB_PID=$(rexec "$SUB_HOST" "nohup $SUB_CMD > $REMOTE_RESULTS_DIR/$RUN_ID.sub.log 2>&1 & echo \$!")
 log "suscriptor PID $SUB_PID en $SUB_HOST"
 sleep 2
@@ -221,6 +219,6 @@ for h in "$WRITER_HOST" "$SUB_HOST"; do
 done
 
 if [[ $ANALYZE == 1 ]]; then
-  python3 "$ROOT/scripts/analyze_results.py" "$LOCAL_DIR" --quiet ${PUSHGATEWAY_URL:+--pushgateway "$PUSHGATEWAY_URL"} || log "análisis falló"
+  python3 "$ROOT/scripts/analyze_results.py" "$LOCAL_DIR" --quiet || log "análisis falló"
 fi
 log "resultados en $LOCAL_DIR"

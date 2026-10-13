@@ -90,6 +90,5 @@ for item in "${PLAN[@]}"; do
   sleep 3   # deja expirar el descubrimiento de la ejecución anterior
 done
 
-source "$TESTBED"
-python3 "$ROOT/scripts/analyze_results.py" "$OUT" --plots ${PUSHGATEWAY_URL:+--pushgateway "$PUSHGATEWAY_URL"}
+python3 "$ROOT/scripts/analyze_results.py" "$OUT" --plots
 echo "Matriz completa: $OUT/report.md"
