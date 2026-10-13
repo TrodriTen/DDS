@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  =============================================================================
+  cyclonedds_qos.xml — Perfiles de QoS para el QoS Provider de Cyclone DDS 11
+  (formato OMG DDS-XML 1.0). Equivalentes 1:1 a los perfiles data_writer /
+  data_reader de fastdds_profiles.xml.
+
+  Uso:  cyclonedds_publisher - -qos-profile radar=radar_rt,sonar=sonar_rt
+        (se resuelve como "bench_qos::radar_rt"). Sólo los campos indicados
+        explícitamente por CLI sobrescriben lo definido aquí.
+  =============================================================================
+-->
+<dds xmlns="http://www.omg.org/spec/DDS-XML"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:schemaLocation="http://www.omg.org/spec/DDS-XML/20180501/dds-xml_qos_definitions.xsd">
+  <qos_library name="bench_qos">
+
+    <!-- RADAR crítico: RELIABLE, KEEP_LAST 8, ResourceLimits estrictos,
+         DEADLINE 20 ms, TRANSPORT_PRIORITY 50 -->
+    <qos_profile name="radar_rt">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+          <max_blocking_time><sec>0</sec><nanosec>100000000</nanosec></max_blocking_time>
+        </reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>8</depth></history>
+        <resource_limits>
+          <max_samples>512</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>8</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>0</sec><nanosec>20000000</nanosec></period></deadline>
+        <latency_budget><duration><sec>0</sec><nanosec>0</nanosec></duration></latency_budget>
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>1</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+        <transport_priority><value>50</value></transport_priority>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>8</depth></history>
+        <resource_limits>
+          <max_samples>512</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>8</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>0</sec><nanosec>20000000</nanosec></period></deadline>
+        <latency_budget><duration><sec>0</sec><nanosec>0</nanosec></duration></latency_budget>
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>1</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+      </datareader_qos>
+    </qos_profile>
+
+    <!-- RADAR best-effort -->
+    <qos_profile name="radar_be">
+      <datawriter_qos>
+        <reliability><kind>BEST_EFFORT_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+        <resource_limits>
+          <max_samples>64</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>0</sec><nanosec>20000000</nanosec></period></deadline>
+        <transport_priority><value>50</value></transport_priority>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>BEST_EFFORT_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+        <resource_limits>
+          <max_samples>64</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>0</sec><nanosec>20000000</nanosec></period></deadline>
+      </datareader_qos>
+    </qos_profile>
+
+    <!-- SONAR -->
+    <qos_profile name="sonar_rt">
+      <datawriter_qos>
+        <reliability>
+          <kind>RELIABLE_RELIABILITY_QOS</kind>
+          <max_blocking_time><sec>0</sec><nanosec>100000000</nanosec></max_blocking_time>
+        </reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>4</depth></history>
+        <resource_limits>
+          <max_samples>32</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>4</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>0</sec><nanosec>50000000</nanosec></period></deadline>
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>1</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+        <transport_priority><value>30</value></transport_priority>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>4</depth></history>
+        <resource_limits>
+          <max_samples>32</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>4</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>0</sec><nanosec>50000000</nanosec></period></deadline>
+        <liveliness>
+          <kind>AUTOMATIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>1</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+      </datareader_qos>
+    </qos_profile>
+
+    <!-- METEO: liveliness MANUAL_BY_TOPIC (cada write() la afirma) -->
+    <qos_profile name="weather_rt">
+      <datawriter_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+        <resource_limits>
+          <max_samples>8</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>1</sec><nanosec>500000000</nanosec></period></deadline>
+        <liveliness>
+          <kind>MANUAL_BY_TOPIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>3</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+        <transport_priority><value>10</value></transport_priority>
+      </datawriter_qos>
+      <datareader_qos>
+        <reliability><kind>RELIABLE_RELIABILITY_QOS</kind></reliability>
+        <history><kind>KEEP_LAST_HISTORY_QOS</kind><depth>1</depth></history>
+        <resource_limits>
+          <max_samples>8</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+        </resource_limits>
+        <durability><kind>VOLATILE_DURABILITY_QOS</kind></durability>
+        <deadline><period><sec>1</sec><nanosec>500000000</nanosec></period></deadline>
+        <liveliness>
+          <kind>MANUAL_BY_TOPIC_LIVELINESS_QOS</kind>
+          <lease_duration><sec>3</sec><nanosec>0</nanosec></lease_duration>
+        </liveliness>
+      </datareader_qos>
+    </qos_profile>
+
+  </qos_library>
+</dds>

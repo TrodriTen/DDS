@@ -1,0 +1,10 @@
+build/
+build-*/
+results/
+generated/
+*.pyc
+__pycache__/
+.vscode/
+.idea/
+compile_commands.json
+CMakeFiles/

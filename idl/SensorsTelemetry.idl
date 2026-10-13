@@ -1,0 +1,224 @@
+/*
+ * =============================================================================
+ *  SensorsTelemetry.idl — Tipos sintéticos para el benchmark Fast DDS vs
+ *  Cyclone DDS (OMG IDL 4.2 / DDS-XTypes 1.3).
+ * =============================================================================
+ *
+ *  Decisiones de diseño (relevantes para el rendimiento):
+ *
+ *  1. Todos los tipos son @final: sin DHEADER/EMHEADER en XCDR2, codificación
+ *     idéntica a XCDR1 y coste de (de)serialización mínimo y comparable entre
+ *     ambos middlewares.
+ *
+ *  2. Los miembros se ordenan por tamaño de alineación (8 -> 4 -> 2 -> 1 bytes).
+ *     Así el layout en memoria C++ coincide con la representación CDR (XCDR1
+ *     alinea a 8, XCDR2 a 4 los tipos de 8 bytes) y los tipos sin secuencias
+ *     (RadarTrack, WeatherStation, EchoReply) son "plain"/fixed-size:
+ *       - Fast DDS: elegibles para Data-Sharing + loans (zero-copy real).
+ *       - Cyclone DDS: elegibles para PSMX (iceoryx) zero-copy.
+ *     SonarPing contiene una secuencia acotada -> "bounded" pero no "plain":
+ *     Fast DDS puede usar Data-Sharing (con copia); Cyclone recurre a la red.
+ *
+ *  3. Cada muestra embebe un BenchHeader de instrumentación (48 bytes) con:
+ *     número de secuencia, sellos de tiempo REALTIME y MONOTONIC del emisor y
+ *     la estimación de offset de reloj publicador<->suscriptor obtenida vía
+ *     intercambio tipo NTP sobre el topic de eco (ver EchoReply).
+ *
+ *  4. Las claves (@key) definen instancias: la QoS DEADLINE se evalúa POR
+ *     INSTANCIA (por pista radar, por transductor, por estación).
+ * =============================================================================
+ */
+
+module SensorsTelemetry {
+
+    // -------------------------------------------------------------------------
+    //  Constantes globales
+    // -------------------------------------------------------------------------
+    const unsigned long SONAR_MAX_SAMPLES = 1024;   // máx. bytes de muestras crudas
+
+    // Bits de BenchHeader::flags
+    const unsigned long BENCH_FLAG_ECHO_REQUEST = 0x00000001; // el sub debe devolver EchoReply
+    const unsigned long BENCH_FLAG_WARMUP       = 0x00000002; // muestra de calentamiento: no computa
+    const unsigned long BENCH_FLAG_OFFSET_VALID = 0x00000004; // clock_offset_est_ns es válido
+
+    // Bits de WeatherStation::calibration_flags
+    const unsigned long CAL_PRESSURE_OK      = 0x00000001;
+    const unsigned long CAL_TEMPERATURE_OK   = 0x00000002;
+    const unsigned long CAL_HUMIDITY_OK      = 0x00000004;
+    const unsigned long CAL_ANEMOMETER_OK    = 0x00000008;
+    const unsigned long CAL_WIND_VANE_OK     = 0x00000010;
+    const unsigned long CAL_RAIN_GAUGE_OK    = 0x00000020;
+    const unsigned long CAL_GNSS_TIME_LOCK   = 0x00000040;
+    const unsigned long CAL_HEATER_ACTIVE    = 0x00000080; // anti-hielo del anemómetro
+    const unsigned long CAL_DUE              = 0x00000100; // calibración caducada
+    const unsigned long CAL_SENSOR_FAULT     = 0x80000000;
+
+    // -------------------------------------------------------------------------
+    //  Instrumentación del benchmark
+    // -------------------------------------------------------------------------
+
+    /*
+     * Cabecera común de instrumentación (48 bytes, sin padding interno).
+     *   T1_rt   : CLOCK_REALTIME del publicador justo antes de write()  -> E2E
+     *   T1_mono : CLOCK_MONOTONIC del publicador (opaco para el suscriptor;
+     *             vuelve en el eco y permite RTT sobre un ÚNICO reloj local)
+     */
+    @final
+    struct BenchHeader {
+        unsigned long long seq;                 // secuencia monotónica por stream (sin huecos)
+        long long          t_pub_tx_rt_ns;      // T1 (CLOCK_REALTIME, ns desde epoch)
+        long long          t_pub_tx_mono_ns;    // T1' (CLOCK_MONOTONIC, ns)
+        long long          clock_offset_est_ns; // θ = reloj_sub - reloj_pub estimado (NTP-like)
+        unsigned long      stream_id;           // identificador del flujo (nodo << 8 | sensor)
+        unsigned long      payload_bytes;       // tamaño CDR útil de la muestra (throughput)
+        unsigned long      flags;               // BENCH_FLAG_*
+        unsigned long      writer_node_id;      // id del nodo emisor
+    };
+
+    /*
+     * Respuesta de eco (Data Reader -> Data Writer). Contiene la cabecera
+     * original y los sellos T2/T3 del suscriptor. Con T1..T4 el publicador
+     * calcula, como NTP (RFC 5905):
+     *   RTT_neto = (T4 - T1) - (T3 - T2)            (independiente del offset)
+     *   θ        = ((T2 - T1) + (T3 - T4)) / 2      (offset de reloj estimado)
+     */
+    @final
+    struct EchoReply {
+        BenchHeader   hdr;              // copia literal de la cabecera recibida
+        long long     t_sub_rx_rt_ns;   // T2: recepción en el suscriptor (REALTIME)
+        long long     t_sub_tx_rt_ns;   // T3: justo antes del write() del eco
+        unsigned long responder_node_id;
+        unsigned long reserved;
+    };
+
+    // -------------------------------------------------------------------------
+    //  Radar
+    // -------------------------------------------------------------------------
+    enum TrackStatus {
+        TRACK_TENTATIVE,     // iniciación (M de N no alcanzado)
+        TRACK_CONFIRMED,
+        TRACK_COASTING,      // sin plots asociados, extrapolando
+        TRACK_LOST           // último mensaje antes de borrar la pista
+    };
+
+    // Identidades estándar (STANAG 1241 / MIL-STD-6016)
+    enum TargetIdentity {
+        IDENTITY_PENDING,
+        IDENTITY_UNKNOWN,
+        IDENTITY_ASSUMED_FRIEND,
+        IDENTITY_FRIEND,
+        IDENTITY_NEUTRAL,
+        IDENTITY_SUSPECT,
+        IDENTITY_HOSTILE
+    };
+
+    enum TargetEnvironment {
+        ENV_AIR,
+        ENV_SURFACE,
+        ENV_SUBSURFACE,
+        ENV_LAND,
+        ENV_SPACE
+    };
+
+    // Triángulo superior de una matriz 3x3 simétrica: [xx, xy, xz, yy, yz, zz]
+    typedef double Covariance3Upper[6];
+
+    /*
+     * Traza de pista radar en coordenadas ENU locales a la antena.
+     * Covarianza simplificada: bloques 3x3 de posición y velocidad
+     * (se ignora la covarianza cruzada posición-velocidad).
+     * Tamaño CDR: 236 bytes (fixed-size / plain).
+     */
+    @final
+    struct RadarTrack {
+        BenchHeader       header;
+        long long         timestamp_ns;          // instante de la medida (ns desde epoch)
+        double            x;                     // m  (Este)
+        double            y;                     // m  (Norte)
+        double            z;                     // m  (Arriba)
+        double            vx;                    // m/s
+        double            vy;                    // m/s
+        double            vz;                    // m/s
+        Covariance3Upper  position_covariance;   // m^2
+        Covariance3Upper  velocity_covariance;   // (m/s)^2
+        @key unsigned long track_id;             // identificador único de pista
+        unsigned long     sensor_id;
+        float             snr_db;
+        float             rcs_dbsm;              // sección radar equivalente
+        float             track_quality;         // [0, 1]
+        TrackStatus       status;
+        TargetIdentity    identity;
+        TargetEnvironment environment;
+        unsigned short    hit_count;
+        unsigned short    miss_count;
+    };
+
+    // -------------------------------------------------------------------------
+    //  Sonar
+    // -------------------------------------------------------------------------
+    enum SonarMode {
+        SONAR_PASSIVE,
+        SONAR_ACTIVE_CW,          // pulso de onda continua
+        SONAR_ACTIVE_LFM,         // chirp FM lineal
+        SONAR_BATHYMETRIC         // ecosonda multihaz / batimetría
+    };
+
+    /*
+     * Ping acústico con muestras crudas de tamaño variable (0..1024 bytes).
+     * Tamaño CDR: 136 + 4 (longitud) + N bytes (bounded, NO plain).
+     */
+    @final
+    struct SonarPing {
+        BenchHeader    header;
+        long long      timestamp_ns;          // instante de emisión del ping
+        double         latitude_deg;          // posición del transductor (WGS-84)
+        double         longitude_deg;
+        double         depth_m;               // profundidad del transductor
+        double         sound_speed_mps;       // velocidad del sonido en superficie
+        @key unsigned long transducer_id;
+        unsigned long  ping_number;
+        float          center_frequency_hz;
+        float          bandwidth_hz;
+        float          sample_rate_hz;
+        float          pulse_length_s;
+        float          source_level_db;       // dB re 1 µPa @ 1 m
+        float          receiver_gain_db;
+        float          beam_azimuth_deg;
+        float          beam_elevation_deg;
+        SonarMode      mode;
+        unsigned short bits_per_sample;       // 8 / 12 / 16
+        unsigned short channel_count;
+        sequence<octet, SONAR_MAX_SAMPLES> samples;   // muestras crudas (batimetría/eco)
+    };
+
+    // -------------------------------------------------------------------------
+    //  Meteorología
+    // -------------------------------------------------------------------------
+
+    /*
+     * Reporte periódico de estación meteorológica (estilo METAR/SYNOP).
+     * Tamaño CDR: 136 bytes (fixed-size / plain).
+     */
+    @final
+    struct WeatherStation {
+        BenchHeader    header;
+        long long      timestamp_ns;           // instante de la observación
+        long long      last_calibration_ns;    // última calibración (ns desde epoch)
+        double         latitude_deg;
+        double         longitude_deg;
+        double         altitude_m;
+        @key unsigned long station_id;
+        float          pressure_hpa;           // QFE
+        float          temperature_c;
+        float          dew_point_c;
+        float          relative_humidity_pct;  // [0, 100]
+        float          wind_direction_deg;     // media 2 min, desde el Norte verdadero
+        float          wind_speed_mps;         // media 2 min
+        float          wind_gust_mps;          // ráfaga máxima 3 s
+        float          wind_gust_direction_deg;
+        float          visibility_m;
+        float          precipitation_rate_mmph;
+        unsigned long  calibration_flags;      // CAL_*
+    };
+
+};  // module SensorsTelemetry

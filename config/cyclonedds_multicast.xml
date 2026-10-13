@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  cyclonedds_multicast.xml — OVERLAY sobre cyclonedds.xml para el escenario
+  UDPv4 multicast (- -transport udpm).
+
+  Cyclone elige el conjunto de direcciones de envío por coste
+  (General/AddrsetCosts; por defecto uc=2, mc=3, delivered=-1): con UN solo
+  lector siempre ganaría el unicast. Para forzar multicast:
+    * los topics de datos (no los de eco) se mapean a una partición de red con
+      el grupo DDS_BENCH_MCAST_ADDR, y
+    * el coste base del multicast se iguala por debajo del unicast.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <AllowMulticast>true</AllowMulticast>
+      <AddrsetCosts>
+        <mc>1</mc>
+        <uc>2</uc>
+      </AddrsetCosts>
+      <!-- 1 = el datagrama no sale de la subred del switch -->
+      <MulticastTimeToLive>1</MulticastTimeToLive>
+    </General>
+    <Partitioning>
+      <NetworkPartitions>
+        <NetworkPartition Name="sensors_mc" Address="${DDS_BENCH_MCAST_ADDR:-239.255.0.2}"/>
+      </NetworkPartitions>
+      <PartitionMappings>
+        <PartitionMapping DCPSPartitionTopic="*.*RadarTrack" NetworkPartition="sensors_mc"/>
+        <PartitionMapping DCPSPartitionTopic="*.*SonarPing" NetworkPartition="sensors_mc"/>
+        <PartitionMapping DCPSPartitionTopic="*.*WeatherStation" NetworkPartition="sensors_mc"/>
+      </PartitionMappings>
+    </Partitioning>
+  </Domain>
+</CycloneDDS>

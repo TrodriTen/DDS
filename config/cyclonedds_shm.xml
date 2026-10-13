@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  cyclonedds_shm.xml — OVERLAY sobre cyclonedds.xml para procesos colocalizados
+  (- -transport shm | zc) mediante PSMX (Pub/Sub Message eXchange) con iceoryx.
+
+  Requisitos:
+    * Cyclone compilado con ENABLE_ICEORYX=ON (scripts/install_middleware.sh
+      - -with-iceoryx) y el daemon RouDi en marcha:
+          iox-roudi -c config/iceoryx_roudi.toml
+    * Tipos de tamaño fijo (RadarTrack, WeatherStation, EchoReply). SonarPing
+      (sequence<octet,1024>) no es fixed-size: Cyclone lo envía por la red
+      local (loopback) aunque este overlay esté activo.
+    * QoS compatibles con iceoryx: VOLATILE, KEEP_LAST con depth <= capacidad
+      configurada en RouDi.
+  Con - -loans (escenario zc) el publicador escribe directamente en el chunk de
+  memoria compartida: zero-copy de extremo a extremo.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <PubSubMessageExchange type="iox" library="psmx_iox"
+                               config="SERVICE_NAME=dds_bench;LOG_LEVEL=WARN;PRIORITY=${DDS_BENCH_IOX_PRIO:-OTHER:0};"/>
+      </Interfaces>
+    </General>
+  </Domain>
+</CycloneDDS>

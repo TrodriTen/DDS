@@ -1,0 +1,24 @@
+# iceoryx RouDi — pools de memoria compartida para Cyclone DDS PSMX (psmx_iox).
+# Arranque:  iox-roudi -c config/iceoryx_roudi.toml
+#
+# Cada chunk necesita el tamaño del tipo + ~64 B de cabecera (iceoryx + PSMX):
+#   RadarTrack 240 B     -> pool de 512 B
+#   WeatherStation 144 B -> pool de 512 B
+#   EchoReply 80 B       -> pool de 512 B
+# Dimensionado: (nº writers x (history depth + chunks en vuelo)) con holgura.
+[general]
+version = 1
+
+[[segment]]
+
+[[segment.mempool]]
+size = 512
+count = 32768
+
+[[segment.mempool]]
+size = 2048
+count = 4096
+
+[[segment.mempool]]
+size = 16384
+count = 256

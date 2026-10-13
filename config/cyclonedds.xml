@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  =============================================================================
+  cyclonedds.xml — Configuración de dominio Eclipse Cyclone DDS 11.x (BASE)
+  =============================================================================
+  Escenario: UDPv4 unicast para datos, multicast sólo para descubrimiento SPDP.
+  Overlays (el binario los encadena según - -transport):
+    udpm   -> cyclonedds.xml,cyclonedds_multicast.xml
+    shm/zc -> cyclonedds.xml,cyclonedds_shm.xml     (PSMX iceoryx, iox-roudi)
+
+  Variables (sustitución ${VAR:-defecto} de Cyclone; las exporta el binario):
+    DDS_BENCH_IFACE      interfaz de la red de pruebas
+    DDS_BENCH_MW_CLASS   realtime | default     (- -no-rt)
+    DDS_BENCH_MW_PRIO    prioridad SCHED_FIFO de los hilos del middleware
+    DDS_BENCH_SYNC_TP    umbral de TRANSPORT_PRIORITY para entrega síncrona
+
+  Las QoS de entidad (RELIABILITY, HISTORY, DEADLINE...) se fijan en C++
+  (QosSpec) o mediante el QoS Provider: config/cyclonedds_qos.xml.
+  =============================================================================
+-->
+<CycloneDDS xmlns="https://cdds.io/config"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="https://cdds.io/config https://raw.githubusercontent.com/eclipse-cyclonedds/cyclonedds/master/etc/cyclonedds.xsd">
+  <Domain Id="any">
+
+    <General>
+      <Interfaces>
+        <NetworkInterface name="${DDS_BENCH_IFACE:-lo}" priority="default" multicast="default"/>
+      </Interfaces>
+      <!-- spdp: multicast SOLO para descubrimiento; datos y SEDP por unicast -->
+      <AllowMulticast>spdp</AllowMulticast>
+      <!-- Por debajo de la MTU estándar evita fragmentación IP en el switch -->
+      <MaxMessageSize>1452B</MaxMessageSize>
+      <FragmentSize>1344B</FragmentSize>
+      <Transport>udp</Transport>
+    </General>
+
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>32</MaxAutoParticipantIndex>
+      <LeaseDuration>10s</LeaseDuration>
+      <SPDPInterval>2s</SPDPInterval>
+      <!-- Descubrimiento unicast sin multicast (switches sin IGMP snooping):
+      <Peers>
+        <Peer Address="192.168.10.11"/>
+        <Peer Address="192.168.10.12"/>
+      </Peers>
+      -->
+    </Discovery>
+
+    <Internal>
+      <!-- Buffers de socket de 4 MiB (requiere net.core.rmem_max/wmem_max) -->
+      <SocketReceiveBufferSize min="4MiB"/>
+      <SocketSendBufferSize min="4MiB"/>
+      <!-- Temporizadores de fiabilidad alineados con fastdds_profiles.xml -->
+      <HeartbeatInterval min="5ms" minsched="5ms" max="1s">20ms</HeartbeatInterval>
+      <NackDelay>1ms</NackDelay>
+      <AckDelay>1ms</AckDelay>
+      <AutoReschedNackDelay>20ms</AutoReschedNackDelay>
+      <!-- Entrega síncrona en el hilo "recv" (sin cola de entrega) para writers con
+           TRANSPORT_PRIORITY >= umbral y LATENCY_BUDGET <= cota. Es el ÚNICO
+           efecto de TRANSPORT_PRIORITY en Cyclone (no se mapea a DSCP). -->
+      <SynchronousDeliveryPriorityThreshold>${DDS_BENCH_SYNC_TP:-0}</SynchronousDeliveryPriorityThreshold>
+      <SynchronousDeliveryLatencyBound>inf</SynchronousDeliveryLatencyBound>
+      <!-- Caché de historia del writer (control de flujo de datos fiables) -->
+      <Watermarks>
+        <WhcHigh>500kB</WhcHigh>
+        <WhcLow>1kB</WhcLow>
+        <WhcAdaptive>true</WhcAdaptive>
+      </Watermarks>
+      <MultipleReceiveThreads>true</MultipleReceiveThreads>
+    </Internal>
+
+    <!-- Hilos internos: clase/prioridad dirigidas por el CLI (- -mw-prio/- -no-rt).
+         Con "default" heredan la política del hilo que crea el participante. -->
+    <Threads>
+      <Thread Name="recv">
+        <Scheduling><Class>${DDS_BENCH_MW_CLASS:-default}</Class><Priority>${DDS_BENCH_MW_PRIO:-0}</Priority></Scheduling>
+      </Thread>
+      <Thread Name="recvUC">
+        <Scheduling><Class>${DDS_BENCH_MW_CLASS:-default}</Class><Priority>${DDS_BENCH_MW_PRIO:-0}</Priority></Scheduling>
+      </Thread>
+      <Thread Name="recvMC">
+        <Scheduling><Class>${DDS_BENCH_MW_CLASS:-default}</Class><Priority>${DDS_BENCH_MW_PRIO:-0}</Priority></Scheduling>
+      </Thread>
+      <Thread Name="tev">
+        <Scheduling><Class>${DDS_BENCH_MW_CLASS:-default}</Class><Priority>${DDS_BENCH_MW_PRIO:-0}</Priority></Scheduling>
+      </Thread>
+      <Thread Name="dq.builtins">
+        <Scheduling><Class>default</Class></Scheduling>
+      </Thread>
+      <Thread Name="lease">
+        <Scheduling><Class>${DDS_BENCH_MW_CLASS:-default}</Class><Priority>${DDS_BENCH_MW_PRIO:-0}</Priority></Scheduling>
+      </Thread>
+    </Threads>
+
+    <Tracing>
+      <Verbosity>warning</Verbosity>
+      <OutputFile>stderr</OutputFile>
+    </Tracing>
+
+  </Domain>
+</CycloneDDS>

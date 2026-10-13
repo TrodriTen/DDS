@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  =============================================================================
+  fastdds_profiles.xml — Perfiles eProsima Fast DDS 3.x del benchmark
+  =============================================================================
+  Variables de entorno (sustitución ${VAR} de Fast DDS; las exporta el binario
+  antes de cargar este fichero a partir del CLI):
+    DDS_BENCH_IFACE       interfaz de la red de pruebas (p.ej. enp3s0)
+    DDS_BENCH_MW_POLICY   1 = SCHED_FIFO, 0 = SCHED_OTHER   (- -mw-prio / - -no-rt)
+    DDS_BENCH_MW_PRIO     prioridad de los hilos internos del middleware
+
+  Reparto de responsabilidades:
+    * Este XML: transporte, hilos, buffers, descubrimiento, temporizadores del
+      protocolo de fiabilidad, política de memoria de la historia.
+    * C++ (QosSpec, src/fastdds/fastdds_backend.hpp): variables del experimento
+      (RELIABILITY, HISTORY, RESOURCE_LIMITS, DEADLINE, LATENCY_BUDGET,
+      LIVELINESS, TRANSPORT_PRIORITY) y DATA_SHARING según - -transport.
+    * Los perfiles data_writer/data_reader con nombre (radar_rt, ...) son la
+      versión XML de los presets y se usan con - -qos-profile NOMBRE.
+
+  Temporizadores de fiabilidad alineados con config/cyclonedds.xml para comparar
+  implementaciones y no valores por defecto (Fast DDS: HB 3 s; Cyclone: 100 ms):
+    heartbeat_period = 20 ms, nack_response_delay = 1 ms,
+    heartbeat_response_delay = 1 ms
+  =============================================================================
+-->
+<dds xmlns="http://www.eprosima.com">
+  <profiles>
+
+    <!-- ================================================== Transportes === -->
+    <transport_descriptors>
+
+      <!-- UDPv4 restringido a la interfaz de pruebas -->
+      <transport_descriptor>
+        <transport_id>udp_bench</transport_id>
+        <type>UDPv4</type>
+        <!-- 4 MiB: absorbe ráfagas bajo contención (requiere net.core.rmem_max/wmem_max) -->
+        <sendBufferSize>4194304</sendBufferSize>
+        <receiveBufferSize>4194304</receiveBufferSize>
+        <maxMessageSize>65500</maxMessageSize>
+        <!-- false: write() se bloquea si el socket está lleno (no descarta en silencio) -->
+        <non_blocking_send>false</non_blocking_send>
+        <!-- Allowlist de interfaz: Fast DDS no expande ${VAR} en atributos XML, así
+             que el backend la fija desde - -iface (DDS_BENCH_IFACE). Equivalente a:
+        <interfaces>
+          <allowlist>
+            <interface name="enp3s0"/>
+          </allowlist>
+        </interfaces>
+        -->
+        <!-- Hilos de recepción (uno por puerto/locator) -->
+        <default_reception_threads>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+          <stack_size>-1</stack_size>
+        </default_reception_threads>
+        <!--
+          TRANSPORT_PRIORITY -> DSCP: <udp_priority_mappings> se valida en el XSD
+          pero sólo está implementado en Fast DDS Pro. En OSS el arnés marca los
+          sockets (IP_TOS/SO_PRIORITY) desde la aplicación: ver bench/dscp.hpp.
+          <udp_priority_mappings>
+            <priority value="50" dscp="46"/>
+          </udp_priority_mappings>
+        -->
+      </transport_descriptor>
+
+      <!-- Memoria compartida (procesos colocalizados en el mismo host) -->
+      <transport_descriptor>
+        <transport_id>shm_bench</transport_id>
+        <type>SHM</type>
+        <segment_size>4194304</segment_size>
+        <port_queue_capacity>1024</port_queue_capacity>
+        <healthy_check_timeout_ms>1000</healthy_check_timeout_ms>
+        <default_reception_threads>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </default_reception_threads>
+      </transport_descriptor>
+
+    </transport_descriptors>
+
+    <!-- ================================================ Participantes === -->
+
+    <!-- UDP unicast (datos unicast; descubrimiento SPDP por multicast) -->
+    <participant profile_name="participant_udp" is_default_profile="true">
+      <rtps>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <userTransports>
+          <transport_id>udp_bench</transport_id>
+        </userTransports>
+        <builtin>
+          <discovery_config>
+            <leaseDuration><sec>10</sec></leaseDuration>
+            <leaseAnnouncement><sec>2</sec></leaseAnnouncement>
+            <initialAnnouncements>
+              <count>5</count>
+              <period><nanosec>100000000</nanosec></period>
+            </initialAnnouncements>
+          </discovery_config>
+          <!-- Historia de endpoints builtin preasignada -->
+          <readerHistoryMemoryPolicy>PREALLOCATED_WITH_REALLOC</readerHistoryMemoryPolicy>
+          <writerHistoryMemoryPolicy>PREALLOCATED_WITH_REALLOC</writerHistoryMemoryPolicy>
+        </builtin>
+        <!-- Preasignación de estructuras de descubrimiento (sin malloc en régimen) -->
+        <allocation>
+          <total_participants><initial>8</initial><maximum>32</maximum><increment>4</increment></total_participants>
+          <total_readers><initial>16</initial><maximum>0</maximum><increment>8</increment></total_readers>
+          <total_writers><initial>16</initial><maximum>0</maximum><increment>8</increment></total_writers>
+          <send_buffers><preallocated_number>16</preallocated_number><dynamic>false</dynamic></send_buffers>
+        </allocation>
+        <!-- Hilos internos: política/prioridad dirigidas por el CLI (- -mw-prio) -->
+        <timed_events_thread>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </timed_events_thread>
+        <builtin_controllers_sender_thread>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </builtin_controllers_sender_thread>
+        <builtin_transports_reception_threads>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </builtin_transports_reception_threads>
+      </rtps>
+    </participant>
+
+    <!-- UDP multicast: igual que udp; el backend añade el locator multicast
+         (DDS_BENCH_MCAST_ADDR, puerto de usuario del dominio) a los DataReaders
+         de datos, de modo que el DataWriter envía un único datagrama al grupo. -->
+    <participant profile_name="participant_udpm">
+      <rtps>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <userTransports>
+          <transport_id>udp_bench</transport_id>
+        </userTransports>
+        <builtin>
+          <discovery_config>
+            <leaseDuration><sec>10</sec></leaseDuration>
+            <leaseAnnouncement><sec>2</sec></leaseAnnouncement>
+          </discovery_config>
+        </builtin>
+        <timed_events_thread>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </timed_events_thread>
+        <builtin_controllers_sender_thread>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </builtin_controllers_sender_thread>
+      </rtps>
+    </participant>
+
+    <!-- SHM: transporte de memoria compartida (con serialización) -->
+    <participant profile_name="participant_shm">
+      <rtps>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <userTransports>
+          <transport_id>shm_bench</transport_id>
+        </userTransports>
+        <timed_events_thread>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </timed_events_thread>
+      </rtps>
+    </participant>
+
+    <!-- ZC: SHM + Data-Sharing (zero-copy real con loans en tipos plain:
+         RadarTrack, WeatherStation). El backend activa data_sharing AUTOMATIC. -->
+    <participant profile_name="participant_zc">
+      <rtps>
+        <useBuiltinTransports>false</useBuiltinTransports>
+        <userTransports>
+          <transport_id>shm_bench</transport_id>
+        </userTransports>
+        <timed_events_thread>
+          <scheduling_policy>${DDS_BENCH_MW_POLICY}</scheduling_policy>
+          <priority>${DDS_BENCH_MW_PRIO}</priority>
+        </timed_events_thread>
+      </rtps>
+    </participant>
+
+    <!-- Configuración "de fábrica" (UDPv4+SHM builtin) para comparativas
+         out-of-the-box: - -participant-profile participant_defaults -->
+    <participant profile_name="participant_defaults">
+      <rtps/>
+    </participant>
+
+    <!-- =========================== DataWriter/DataReader por defecto === -->
+    <!-- Afectan a TODOS los endpoints (datos y eco). Sólo parámetros de
+         despliegue; las variables del experimento las fija el código. -->
+    <data_writer profile_name="default_writer" is_default_profile="true">
+      <qos>
+        <publishMode><kind>SYNCHRONOUS</kind></publishMode>
+      </qos>
+      <times>
+        <initial_heartbeat_delay><nanosec>1000000</nanosec></initial_heartbeat_delay>
+        <heartbeat_period><nanosec>20000000</nanosec></heartbeat_period>
+        <nack_response_delay><nanosec>1000000</nanosec></nack_response_delay>
+        <nack_supression_duration><nanosec>0</nanosec></nack_supression_duration>
+      </times>
+      <historyMemoryPolicy>PREALLOCATED_WITH_REALLOC</historyMemoryPolicy>
+    </data_writer>
+
+    <data_reader profile_name="default_reader" is_default_profile="true">
+      <times>
+        <initial_acknack_delay><nanosec>1000000</nanosec></initial_acknack_delay>
+        <heartbeat_response_delay><nanosec>1000000</nanosec></heartbeat_response_delay>
+      </times>
+      <historyMemoryPolicy>PREALLOCATED_WITH_REALLOC</historyMemoryPolicy>
+    </data_reader>
+
+    <!-- ========================== Perfiles de QoS (- -qos-profile X) === -->
+
+    <!-- RADAR, crítico: RELIABLE, KEEP_LAST 8, preasignación estricta,
+         DEADLINE 20 ms (pistas a 100 Hz), TRANSPORT_PRIORITY 50 (EF) -->
+    <data_writer profile_name="radar_rt">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>8</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>512</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>8</max_samples_per_instance>
+          <allocated_samples>512</allocated_samples>
+          <extra_samples>1</extra_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability>
+          <kind>RELIABLE</kind>
+          <max_blocking_time><nanosec>100000000</nanosec></max_blocking_time>
+        </reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>20000000</nanosec></period></deadline>
+        <latencyBudget><duration><sec>0</sec></duration></latencyBudget>
+        <liveliness>
+          <kind>AUTOMATIC</kind>
+          <lease_duration><sec>1</sec></lease_duration>
+          <announcement_period><nanosec>500000000</nanosec></announcement_period>
+        </liveliness>
+        <transport_priority>50</transport_priority>
+        <publishMode><kind>SYNCHRONOUS</kind></publishMode>
+      </qos>
+      <times>
+        <heartbeat_period><nanosec>20000000</nanosec></heartbeat_period>
+        <nack_response_delay><nanosec>1000000</nanosec></nack_response_delay>
+      </times>
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_writer>
+
+    <data_reader profile_name="radar_rt">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>8</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>512</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>8</max_samples_per_instance>
+          <allocated_samples>512</allocated_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability><kind>RELIABLE</kind></reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>20000000</nanosec></period></deadline>
+        <latencyBudget><duration><sec>0</sec></duration></latencyBudget>
+        <liveliness>
+          <kind>AUTOMATIC</kind>
+          <lease_duration><sec>1</sec></lease_duration>
+        </liveliness>
+      </qos>
+      <times>
+        <heartbeat_response_delay><nanosec>1000000</nanosec></heartbeat_response_delay>
+      </times>
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_reader>
+
+    <!-- RADAR, best-effort: el dato más reciente vale más que la retransmisión -->
+    <data_writer profile_name="radar_be">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>1</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>64</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+          <allocated_samples>64</allocated_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability><kind>BEST_EFFORT</kind></reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>20000000</nanosec></period></deadline>
+        <transport_priority>50</transport_priority>
+      </qos>
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_writer>
+
+    <data_reader profile_name="radar_be">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>1</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>64</max_samples>
+          <max_instances>64</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+          <allocated_samples>64</allocated_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability><kind>BEST_EFFORT</kind></reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>20000000</nanosec></period></deadline>
+      </qos>
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_reader>
+
+    <!-- SONAR: RELIABLE, KEEP_LAST 4, DEADLINE 50 ms, payload variable -->
+    <data_writer profile_name="sonar_rt">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>4</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>32</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>4</max_samples_per_instance>
+          <allocated_samples>32</allocated_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability>
+          <kind>RELIABLE</kind>
+          <max_blocking_time><nanosec>100000000</nanosec></max_blocking_time>
+        </reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>50000000</nanosec></period></deadline>
+        <liveliness>
+          <kind>AUTOMATIC</kind>
+          <lease_duration><sec>1</sec></lease_duration>
+          <!-- Fast DDS exige announcement_period < lease_duration (defecto 3 s) -->
+          <announcement_period><nanosec>500000000</nanosec></announcement_period>
+        </liveliness>
+        <transport_priority>30</transport_priority>
+      </qos>
+      <!-- Tipo bounded (sequence<octet,1024>): PREALLOCATED reserva el máximo -->
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_writer>
+
+    <data_reader profile_name="sonar_rt">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>4</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>32</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>4</max_samples_per_instance>
+          <allocated_samples>32</allocated_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability><kind>RELIABLE</kind></reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>50000000</nanosec></period></deadline>
+        <liveliness><kind>AUTOMATIC</kind><lease_duration><sec>1</sec></lease_duration></liveliness>
+      </qos>
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_reader>
+
+    <!-- METEO: RELIABLE, KEEP_LAST 1, DEADLINE 1.5 s, liveliness por topic -->
+    <data_writer profile_name="weather_rt">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>1</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>8</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+          <allocated_samples>8</allocated_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability><kind>RELIABLE</kind></reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>500000000</nanosec><sec>1</sec></period></deadline>
+        <liveliness>
+          <kind>MANUAL_BY_TOPIC</kind>
+          <lease_duration><sec>3</sec></lease_duration>
+          <announcement_period><sec>1</sec></announcement_period>
+        </liveliness>
+        <transport_priority>10</transport_priority>
+      </qos>
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_writer>
+
+    <data_reader profile_name="weather_rt">
+      <topic>
+        <historyQos><kind>KEEP_LAST</kind><depth>1</depth></historyQos>
+        <resourceLimitsQos>
+          <max_samples>8</max_samples>
+          <max_instances>8</max_instances>
+          <max_samples_per_instance>1</max_samples_per_instance>
+          <allocated_samples>8</allocated_samples>
+        </resourceLimitsQos>
+      </topic>
+      <qos>
+        <reliability><kind>RELIABLE</kind></reliability>
+        <durability><kind>VOLATILE</kind></durability>
+        <deadline><period><nanosec>500000000</nanosec><sec>1</sec></period></deadline>
+        <liveliness>
+          <kind>MANUAL_BY_TOPIC</kind>
+          <lease_duration><sec>3</sec></lease_duration>
+        </liveliness>
+      </qos>
+      <historyMemoryPolicy>PREALLOCATED</historyMemoryPolicy>
+    </data_reader>
+
+  </profiles>
+</dds>
