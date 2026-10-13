@@ -79,8 +79,15 @@ class PubStreamBase {
   virtual void close_writer(int64_t ack_timeout_ns) = 0;
 
   // Fila de ventana (hilo de estadísticas)
-  void collect_window(Record& r, double window_s) {
+  void collect_window(Record& r, double window_s, const std::string& phase, double cpu_pct) {
+    PhaseAgg& ph = phases_.at(phase);
+    ph.seconds += window_s;
+    ++ph.windows;
+    ph.cpu_pct_sum += cpu_pct;
     wacc_.collect([&](const PubWriteAcc& a) {
+      ph.msgs += a.samples;
+      ph.bytes += a.bytes;
+      ph.errors += a.write_errors;
       r.add("msgs", a.samples);
       r.add("msg_per_s", rate(static_cast<double>(a.samples), window_s), 1);
       r.add("bytes", a.bytes);
@@ -93,6 +100,8 @@ class PubStreamBase {
       window_active_ = a.samples > 0;
     });
     eacc_.collect([&](const PubEchoAcc& a) {
+      ph.lat_a.merge(a.rtt);
+      ph.lat_b.merge(a.rtt_net);
       r.add("echoes", a.echoes);
       const LatencySummary rtt = summarize(a.rtt);
       const LatencySummary net = summarize(a.rtt_net);
@@ -120,6 +129,7 @@ class PubStreamBase {
       active_dl_ += d_dl;
       active_ll_ += d_ll;
       active_s_ += window_s;
+      ph.deadline_missed += d_dl;
     }
     r.add("deadline_missed", d_dl);
     r.add("deadline_miss_rate", deadline_miss_rate(d_dl, window_s, spec_.instances, spec_.qos.deadline_ns.value_or(0)), 6);
@@ -158,6 +168,30 @@ class PubStreamBase {
           deadline_miss_rate(active_dl_, active_s_, spec_.instances, spec_.qos.deadline_ns.value_or(0)), 6);
     r.add("liveliness_lost", active_ll_);
     r.add("incompatible_qos", wstatus_.offered_incompatible_qos.load());
+  }
+
+  // Filas por fase (baseline / noise / recovery...)
+  void phase_records(const BenchConfig& cfg, std::vector<Record>& out) const {
+    for (const auto& [name, ph] : phases_.entries()) {
+      Record r;
+      add_identity(r, cfg, to_string(spec_.kind), name);
+      r.add("windows", ph->windows);
+      r.add("seconds", ph->seconds, 3);
+      r.add("msgs", ph->msgs);
+      r.add("msg_per_s", rate(static_cast<double>(ph->msgs), ph->seconds), 1);
+      r.add("mb_per_s", rate(static_cast<double>(ph->bytes), ph->seconds) / 1e6, 4);
+      r.add("lost", uint64_t{0});
+      r.add("loss_pct", 0.0, 4);
+      r.add("errors", ph->errors);
+      r.add("deadline_missed", ph->deadline_missed);
+      r.add("deadline_miss_rate",
+            deadline_miss_rate(ph->deadline_missed, ph->seconds, spec_.instances, spec_.qos.deadline_ns.value_or(0)), 6);
+      r.add("cpu_pct_avg", ph->windows ? ph->cpu_pct_sum / static_cast<double>(ph->windows) : 0.0, 2);
+      r.add("latency_metric", "rtt", true);
+      r.add_latency_us("lat", summarize(ph->lat_a));
+      r.add_latency_us("lat2", summarize(ph->lat_b));
+      out.push_back(std::move(r));
+    }
   }
 
   [[nodiscard]] uint64_t sent() const noexcept { return sent_; }
@@ -243,6 +277,7 @@ class PubStreamBase {
   double active_s_ = 0;
   bool window_active_ = false;
   int64_t last_offset_ns_ = 0, last_offset_delay_ns_ = 0;
+  PhaseTable phases_;
 };
 
 // ---------------------------------------------------------------------------
@@ -541,7 +576,7 @@ class PublisherApp {
     host.sample();
     const double window_s = host.window_s();
     const bool warm = window_end_mono <= measure_start_ns_;
-    const std::string phase = read_phase(cfg_.phase_file, warm ? "warmup" : "run");
+    const std::string phase = warm ? std::string("warmup") : read_phase(cfg_.phase_file, "run");
     std::vector<Record> records;
     for (auto& s : streams_) {
       Record r;
@@ -551,7 +586,7 @@ class PublisherApp {
       r.add("t_rel_s", static_cast<double>(window_end_mono - measure_start_ns_) / 1e9, 3);
       r.add("window_s", window_s, 3);
       r.add("warmup", static_cast<int64_t>(warm ? 1 : 0));
-      s->collect_window(r, window_s);
+      s->collect_window(r, window_s, phase, host.proc().cpu_pct);
       host.append(r);
       timeseries_.write(r);
       records.push_back(std::move(r));
@@ -611,7 +646,16 @@ class PublisherApp {
       if (!cfg_.quiet) print_summary(r);
     }
     write_file_atomic(ctx_.output_prefix + "_summary.prom", to_prometheus(records, "dds_bench_summary_"));
+    write_phases();
     log_info(cfg_, "resultados en " + ctx_.output_prefix + "_*.csv");
+  }
+
+  void write_phases() {
+    std::vector<Record> rows;
+    for (auto& s : streams_) s->phase_records(cfg_, rows);
+    CsvSink csv;
+    csv.open(ctx_.output_prefix + "_phases.csv");
+    for (const auto& r : rows) csv.write(r);
   }
 
   void print_summary(const Record& r) {

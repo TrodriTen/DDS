@@ -63,7 +63,7 @@ if(BENCH_WITH_FASTDDS)
              ${FASTDDS_GEN_DIR}/SensorsTelemetry.hpp
              ${FASTDDS_GEN_DIR}/SensorsTelemetryPubSubTypes.hpp
       COMMAND ${CMAKE_COMMAND} -E make_directory ${FASTDDS_GEN_DIR}
-      COMMAND ${FASTDDSGEN_EXECUTABLE} -replace -cs -d ${FASTDDS_GEN_DIR} ${BENCH_IDL}
+      COMMAND ${FASTDDSGEN_EXECUTABLE} -replace -cs -flat-output-dir -d ${FASTDDS_GEN_DIR} ${BENCH_IDL}
       DEPENDS ${BENCH_IDL}
       COMMENT "fastddsgen: generando tipos Fast DDS desde SensorsTelemetry.idl"
       VERBATIM)

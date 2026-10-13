@@ -14,6 +14,10 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "bench/histogram.hpp"
 
@@ -109,6 +113,33 @@ struct PubEchoAcc {
     rtt_net.reset();
     offset_valid = false;
   }
+};
+
+// ---- Agregado por fase (hilo de estadísticas) -----------------------------
+// Los histogramas de cada ventana se fusionan en los de su fase (baseline,
+// noise, recovery... según --phase-file): percentiles por fase con el mismo
+// error (<0.8 %) que el histograma, sin promediar percentiles de ventana.
+struct PhaseAgg {
+  double seconds = 0;
+  uint64_t windows = 0, msgs = 0, bytes = 0, lost = 0, deadline_missed = 0, sample_lost = 0, errors = 0;
+  double cpu_pct_sum = 0;
+  LatencyHistogram lat_a;  // sub: E2E      | pub: RTT
+  LatencyHistogram lat_b;  // sub: E2E corr | pub: RTT neto
+};
+
+class PhaseTable {
+ public:
+  PhaseAgg& at(const std::string& phase) {
+    for (auto& [name, agg] : phases_) {
+      if (name == phase) return *agg;
+    }
+    phases_.emplace_back(phase, std::make_unique<PhaseAgg>());
+    return *phases_.back().second;
+  }
+  [[nodiscard]] const auto& entries() const noexcept { return phases_; }
+
+ private:
+  std::vector<std::pair<std::string, std::unique_ptr<PhaseAgg>>> phases_;  // orden de aparición
 };
 
 // ---- Contadores de estado DDS (escritos desde callbacks de listener) -------

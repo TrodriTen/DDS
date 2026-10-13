@@ -43,10 +43,18 @@ class SubStreamBase {
   [[nodiscard]] int32_t matched_peak() const noexcept { return status_.matched_peak.load(); }
   [[nodiscard]] bool has_data() const noexcept { return any_data_.load(std::memory_order_relaxed); }
 
-  void collect_window(Record& r, double window_s) {
+  void collect_window(Record& r, double window_s, const std::string& phase, double cpu_pct) {
+    PhaseAgg& ph = phases_.at(phase);
+    ph.seconds += window_s;
+    ++ph.windows;
+    ph.cpu_pct_sum += cpu_pct;
     uint64_t samples = 0;
     acc_.collect([&](const SubWindowAcc& a) {
       samples = a.samples;
+      ph.msgs += a.samples;
+      ph.bytes += a.bytes;
+      ph.lat_a.merge(a.e2e);
+      ph.lat_b.merge(a.e2e_corr);
       r.add("msgs", a.samples);
       r.add("warmup_msgs", a.warmup_samples);
       r.add("msg_per_s", rate(static_cast<double>(a.samples), window_s), 1);
@@ -61,6 +69,7 @@ class SubStreamBase {
         last_dup_ = a.seq_dup;
         last_ooo_ = a.seq_ooo;
       }
+      ph.lost += d_lost;
       r.add("lost", d_lost);
       r.add("loss_pct", a.samples + d_lost ? 100.0 * static_cast<double>(d_lost) / static_cast<double>(a.samples + d_lost) : 0.0, 4);
       r.add("dup", d_dup);
@@ -87,6 +96,8 @@ class SubStreamBase {
       active_sr_ += d_sr;
       active_lv_ += d_lv;
       active_s_ += window_s;
+      ph.deadline_missed += d_dl;
+      ph.sample_lost += d_sl;
     }
     r.add("deadline_missed", d_dl);
     r.add("deadline_miss_rate", deadline_miss_rate(d_dl, window_s, spec_.instances, spec_.qos.deadline_ns.value_or(0)), 6);
@@ -95,6 +106,29 @@ class SubStreamBase {
     r.add("liveliness_not_alive", d_lv);
     r.add("incompatible_qos", status_.requested_incompatible_qos.load());
     r.add("matched", static_cast<int64_t>(status_.matched.load()));
+  }
+
+  void phase_records(const BenchConfig& cfg, std::vector<Record>& out) const {
+    for (const auto& [name, ph] : phases_.entries()) {
+      Record r;
+      add_identity(r, cfg, to_string(spec_.kind), name);
+      r.add("windows", ph->windows);
+      r.add("seconds", ph->seconds, 3);
+      r.add("msgs", ph->msgs);
+      r.add("msg_per_s", rate(static_cast<double>(ph->msgs), ph->seconds), 1);
+      r.add("mb_per_s", rate(static_cast<double>(ph->bytes), ph->seconds) / 1e6, 4);
+      r.add("lost", ph->lost);
+      r.add("loss_pct", ph->msgs + ph->lost ? 100.0 * static_cast<double>(ph->lost) / static_cast<double>(ph->msgs + ph->lost) : 0.0, 4);
+      r.add("errors", ph->sample_lost);
+      r.add("deadline_missed", ph->deadline_missed);
+      r.add("deadline_miss_rate",
+            deadline_miss_rate(ph->deadline_missed, ph->seconds, spec_.instances, spec_.qos.deadline_ns.value_or(0)), 6);
+      r.add("cpu_pct_avg", ph->windows ? ph->cpu_pct_sum / static_cast<double>(ph->windows) : 0.0, 2);
+      r.add("latency_metric", "e2e", true);
+      r.add_latency_us("lat", summarize(ph->lat_a));
+      r.add_latency_us("lat2", summarize(ph->lat_b));
+      out.push_back(std::move(r));
+    }
   }
 
   void summary(Record& r) {
@@ -229,6 +263,7 @@ class SubStreamBase {
   uint64_t last_dl_ = 0, last_sl_ = 0, last_sr_ = 0, last_lv_ = 0;
   uint64_t active_dl_ = 0, active_sl_ = 0, active_sr_ = 0, active_lv_ = 0;
   double active_s_ = 0;
+  PhaseTable phases_;
 };
 
 template <class B, class T>
@@ -417,7 +452,7 @@ class SubscriberApp {
       r.add("window_idx", idx);
       r.add("t_wall_s", static_cast<double>(now_rt_ns()) / 1e9, 3);
       r.add("window_s", window_s, 3);
-      s->collect_window(r, window_s);
+      s->collect_window(r, window_s, phase, host.proc().cpu_pct);
       host.append(r);
       timeseries_.write(r);
       records.push_back(std::move(r));
@@ -481,6 +516,11 @@ class SubscriberApp {
       }
     }
     write_file_atomic(ctx_.output_prefix + "_summary.prom", to_prometheus(records, "dds_bench_summary_"));
+    std::vector<Record> rows;
+    for (auto& s : streams_) s->phase_records(cfg_, rows);
+    CsvSink phases;
+    phases.open(ctx_.output_prefix + "_phases.csv");
+    for (const auto& r : rows) phases.write(r);
     log_info(cfg_, "resultados en " + ctx_.output_prefix + "_*.csv");
   }
 
